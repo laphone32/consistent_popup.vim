@@ -1,8 +1,7 @@
-vim9script
-
 if exists('g:loaded_consistent_popup')
     finish
 endif
+vim9script
 g:loaded_consistent_popup = 1
 
 import "../autoload/consistent_popup/rgQuery.vim" as rq
