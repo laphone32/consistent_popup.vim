@@ -20,7 +20,7 @@ export class AsyncQuery extends qt.QueryType
         if json->get('type', '') ==# 'match'
             var data = json.data
             data.lines.text = trim(data.lines.text, "\r\t\n", 2)
-            if has_key(data, 'path') && has_key(data.path, 'text')
+            if has_key(data, 'path') && has_key(data.path, 'text') && data.path.text !=# '<stdin>'
                 data.filename = fnamemodify(data.path.text, ':t')
             elseif has_key(data, 'lines') && has_key(data.lines, 'text')
                 data.filename = fnamemodify(data.lines.text, ':t')

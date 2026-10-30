@@ -86,4 +86,13 @@ export class NativeListQuery extends qt.QueryType
         endif
         return v:true
     enddef
+
+    def Preview(line: number)
+        if line < len(this.lookup)
+            var data = this.lookup[line]
+            if !empty(data) && !empty(data.path)
+                this.PreviewFile(data.path, data.line, data.col)
+            endif
+        endif
+    enddef
 endclass

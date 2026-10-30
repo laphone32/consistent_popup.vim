@@ -75,8 +75,10 @@ export class QueryType
             var last = this.toRefresh[-1]
             var last_end = last[0] + last[1]
             if start <= last_end
+                var new_start = min([last[0], start])
                 var new_end = max([last_end, start + count])
-                last[1] = new_end - last[0]
+                last[0] = new_start
+                last[1] = new_end - new_start
                 return
             endif
         endif

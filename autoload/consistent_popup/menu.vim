@@ -4,12 +4,12 @@ import "./consistentPopup.vim" as cp
 import "./util.vim" as ut
 
 const NAV_KEYS = {
-    "\<up>": 1, 'k': 1, "\<c-n>": 1,
-    "\<down>": 1, 'j': 1, "\<c-p>": 1,
-    "\<pageup>": 1, "\<c-b>": 1,
-    "\<pagedown>": 1, "\<c-f>": 1,
-    "\<home>": 1,
-    "\<end>": 1, 'G': 1,
+    "\<up>": "\<up>", 'k': 'k', "\<c-n>": "\<c-n>",
+    "\<down>": "\<down>", 'j': 'j', "\<c-p>": "\<c-p>",
+    "\<pageup>": "\<pageup>", "\<c-b>": "\<c-b>",
+    "\<pagedown>": "\<pagedown>", "\<c-f>": "\<c-f>",
+    "\<home>": 'gg',
+    "\<end>": 'G', 'G': 'G',
 }
 
 class MenuArea extends cp.ConsistentPopup
@@ -53,7 +53,7 @@ class MenuArea extends cp.ConsistentPopup
 
     def KeyFilter(key: string): bool
         if has_key(NAV_KEYS, key)
-            win_execute(this.id, 'normal! ' .. key)
+            win_execute(this.id, 'normal! ' .. NAV_KEYS[key])
         endif
 
         return this.OnKey(key, getcurpos(this.id)[1])
