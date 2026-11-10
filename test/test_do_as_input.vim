@@ -72,3 +72,35 @@ export def Test_DoAsInput_EscapeCancelsWithoutCallback()
 
     silent! popup_close(dialog.id)
 enddef
+
+export def Test_DoAsInput_MultibyteEditing()
+    h.ResetState()
+    var dialog = ip.DoAsInput.new({ zindex: 250 })
+    try
+        dialog.Open({ buffer: '日本' })
+        assert_equal(2, dialog.pos, 'pos counts characters, not bytes')
+        assert_equal(['日本▏'], getbufline(winbufnr(dialog.id), 1, '$'))
+
+        # Non-ASCII characters can be typed
+        feedkeys('語é', 'xt')
+        assert_equal('日本語é', dialog.buffer)
+        assert_equal(4, dialog.pos)
+
+        # Cursor movement and deletion work per character
+        feedkeys("\<Left>\<Left>\<BS>", 'xt')
+        assert_equal('日語é', dialog.buffer)
+        assert_equal(1, dialog.pos)
+        assert_equal(['日▏語é'], getbufline(winbufnr(dialog.id), 1, '$'))
+        var props = prop_list(1, { bufnr: winbufnr(dialog.id) })
+        assert_equal(len('日') + 1, props[0].col, 'cursor highlight uses the byte column')
+
+        feedkeys("\<Del>", 'xt')
+        assert_equal('日é', dialog.buffer)
+
+        # Special keys must not be inserted as text
+        feedkeys("\<F5>\<C-x>", 'xt')
+        assert_equal('日é', dialog.buffer)
+    finally
+        silent! popup_close(dialog.id)
+    endtry
+enddef

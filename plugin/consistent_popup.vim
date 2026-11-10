@@ -1,4 +1,21 @@
+" Legacy script up to `vim9script`: it must parse on any Vim so that an
+" unsupported one gets one clear message instead of a stream of errors.
 if exists('g:loaded_consistent_popup')
+    finish
+endif
+if !has('vim9script') || v:version < 901 || !has('popupwin') || !has('textprop')
+            \ || !has('job') || !has('channel') || !has('timers')
+    " Under 80 columns, and shown after startup (VimEnter): a message during
+    " startup would otherwise cause a hit-enter prompt.
+    let s:msg = 'consistent_popup.vim: requires Vim 9.1+ (+popupwin +textprop +job +timers)'
+    if v:vim_did_enter
+        echohl WarningMsg | echomsg s:msg | echohl None
+    else
+        augroup ConsistentPopupVersion
+            autocmd!
+            autocmd VimEnter * echohl WarningMsg | echomsg s:msg | echohl None
+        augroup END
+    endif
     finish
 endif
 vim9script
@@ -35,16 +52,21 @@ var _rg = rq.AsyncRgQuery.new()
 var _find = fq.AsyncFindQuery.new()
 var _buffer = sq.BufferQuery.new()
 var _path = pq.PathQuery.new()
-var _qf = nq.NativeListQuery.new(' quickfix > ', (q) => getqflist())
-var _loc = nq.NativeListQuery.new(' loclist > ', (q) => getloclist(get(q, 'winnr', 0)))
+var _qf = nq.NativeListQuery.new(' quickfix > ', (q) => getqflist(), 'cc')
+var _loc = nq.NativeListQuery.new(' loclist > ', (q) => getloclist(get(q, 'winnr', 0)), 'll')
 
-var term = te.Term.new(
-    get(g:, 'consistent_popup_term_cmd', []),
-    get(g:, 'consistent_popup_term_title', 'Terminal'),
-    get(g:, 'consistent_popup_term_close_on_esc', v:false) ? 'HideTerm' : '',
-    get(g:, 'consistent_popup_term_width', 0)
-)
-var assistant = as.Assistant.new()
+# The floating terminal and assistant need +terminal; the lists do not
+var term: te.Term = null_object
+var assistant: as.Assistant = null_object
+if has('terminal')
+    term = te.Term.new(
+        get(g:, 'consistent_popup_term_cmd', []),
+        get(g:, 'consistent_popup_term_title', 'Terminal'),
+        get(g:, 'consistent_popup_term_close_on_esc', v:false) ? 'HideTerm' : '',
+        get(g:, 'consistent_popup_term_width', 0)
+    )
+    assistant = as.Assistant.new()
+endif
 
 # 3. Commands
 command! -nargs=0 ListResume list.Resume()
@@ -67,15 +89,17 @@ command! -nargs=? ListLoclist list.Call(_loc, {
     \ keyword: <q-args>,
 \ })
 
-command! ShowTerm term.Show()
-command! HideTerm term.Hide()
+if has('terminal')
+    command! ShowTerm term.Show()
+    command! HideTerm term.Hide()
 
-command! ShowAssistant assistant.Show()
-command! HideAssistant assistant.Hide()
-command! AssistantSendVisual assistant.SendVisual()
+    command! ShowAssistant assistant.Show()
+    command! HideAssistant assistant.Hide()
+    command! -range AssistantSendVisual assistant.SendVisual(<range>, <line1>, <line2>)
+endif
 
 # 4. Editor Integration Autocmds (Quickfix interception, dirty tracking, cleanup)
-def g:InterceptQuickfixWindow()
+def InterceptQuickfixWindow()
     if !get(g:, 'consistent_popup_intercept_quickfix', v:true)
         return
     endif
@@ -100,8 +124,12 @@ enddef
 
 augroup ConsistentPopupHooks
     autocmd!
-    autocmd BufWinEnter * if &buftype == 'quickfix' | g:InterceptQuickfixWindow() | endif
+    autocmd BufWinEnter * if &buftype == 'quickfix' | InterceptQuickfixWindow() | endif
     autocmd BufWritePost * list.MarkDirty()
-    autocmd QuitPre * term.Kill()
-    autocmd QuitPre * assistant.Kill()
+    if has('terminal')
+        # ExitPre (not QuitPre) so closing a split with :q doesn't kill the
+        # sessions; running terminal jobs would otherwise block exit (E947).
+        autocmd ExitPre * term.Kill()
+        autocmd ExitPre * assistant.Kill()
+    endif
 augroup END

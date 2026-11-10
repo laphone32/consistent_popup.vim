@@ -1,0 +1,259 @@
+*consistent_popup.txt*	Unified popup lists, floating terminal and assistant
+
+==============================================================================
+CONTENTS						*consistent_popup*
+
+    1. Introduction ............ |consistent_popup-intro|
+    2. Requirements ............ |consistent_popup-requirements|
+    3. Commands ................ |consistent_popup-commands|
+    4. Keys .................... |consistent_popup-keys|
+    5. Matching ................ |consistent_popup-matching|
+    6. Options ................. |consistent_popup-options|
+    7. Quickfix interception ... |consistent_popup-quickfix|
+
+==============================================================================
+1. Introduction					*consistent_popup-intro*
+
+consistent_popup.vim gives one popup UI, written in Vim9 script, for:
+- finding files and grepping with ripgrep,
+- switching buffers,
+- a file tree with create/rename/delete,
+- browsing the quickfix and location lists,
+- a persistent floating terminal,
+- a floating terminal running a CLI coding assistant.
+
+==============================================================================
+2. Requirements				*consistent_popup-requirements*
+
+- Vim 9.1 or newer, with |+popupwin|, |+textprop|, |+job|, |+channel| and
+  |+timers|. On an older Vim the plugin shows one warning and does nothing.
+- |+terminal| for |:ShowTerm| and the assistant commands. Without it these
+  commands are not defined; the lists still work.
+- ripgrep (`rg`) for |:ListFind| and |:ListGrep|.
+- A Unix-like system (Linux, macOS). The plugin runs commands through
+  `/bin/sh`, builds paths with `/`, and starts string assistant commands with
+  `&shell -ic`, so it does not work on Windows.
+
+Newer Vim patches are used when available:
+- |getregion()|: |:AssistantSendVisual| reads the selection directly. On older
+  Vim (such as Ubuntu 24.04's 9.1.0016) it yanks the selection and then
+  restores every register it touched, including the clipboard registers.
+- |base64_decode()|: grep results whose path or line is not valid UTF-8 are
+  shown. Without it those results are skipped.
+
+==============================================================================
+3. Commands					*consistent_popup-commands*
+
+						*:ListFind*
+:ListFind [keyword]	Find files whose path contains [keyword], using
+			|g:consistent_popup_find_cmd|. Without [keyword] the
+			input dialog opens first.
+
+						*:ListGrep*
+:ListGrep [keyword]	Search file contents for [keyword], using
+			|g:consistent_popup_rg_cmd|.
+
+						*:ListBuffer*
+:ListBuffer [keyword]	Switch between listed buffers. Terminal buffers are
+			left out. A `+` marks a modified buffer.
+
+						*:ListPath*
+:ListPath [keyword]	File tree of the current working directory, with the
+			current file's folders expanded and the cursor on it.
+			[keyword] filters the top level; the title shows the
+			filter while it applies.
+
+						*:ListQuickfix*
+:ListQuickfix [keyword]	Browse the quickfix list. <CR> jumps with `:cc {N}`,
+			so the list's current item follows the selection and
+			|:cnext| continues from there.
+
+						*:ListLoclist*
+:ListLoclist [keyword]	Browse the current window's location list. <CR> jumps
+			with `:ll {N}`.
+
+						*:ListResume*
+:ListResume		Show the last list again. If a file was written in
+			the meantime, the list is refreshed first.
+
+						*:ShowTerm* *:HideTerm*
+:ShowTerm		Show the floating terminal. It is started the first
+			time and keeps running while hidden.
+:HideTerm		Hide it.
+
+					*:ShowAssistant* *:HideAssistant*
+:ShowAssistant		Show the assistant terminal, starting
+			`g:consistent_popup_assistant.cmd` the first time.
+:HideAssistant		Hide it.
+
+						*:AssistantSendVisual*
+:'<,'>AssistantSendVisual
+			Send the visual selection to the assistant as a
+			Markdown code block with the file name and line
+			numbers. A charwise or blockwise selection sends
+			exactly the selected text. Mapping example: >
+				xnoremap <Leader>a :AssistantSendVisual<CR>
+<
+:{range}AssistantSendVisual
+			With any other range, send those whole lines.
+
+The terminal and assistant are stopped when Vim exits (|ExitPre|), so a
+running job does not block quitting. Closing a window with |:q| leaves them
+running.
+
+==============================================================================
+4. Keys							*consistent_popup-keys*
+
+In a list ~
+	j  k  <Down>  <Up>  <C-n>  <C-p>	move
+	<PageDown>  <PageUp>  <C-f>  <C-b>	page down / up
+	<Home>			first item
+	<End>  G		last item
+	<CR>			open the item and close the list; if opening
+				fails (for example |E37|), the error is shown
+				and the list stays open
+	p			preview the item in the current window, keep
+				the list open
+	/			edit the keyword in the input dialog
+	r			refresh
+	<Left>  <Right>		switch display mode (see below)
+	<Esc>  q		hide the list (|:ListResume| shows it again)
+
+Display modes, switched with <Left>/<Right>:
+	:ListFind	full path (default) / file name
+	:ListGrep	path and line / file name and line (default)
+	:ListBuffer	full path (default) / file name
+	:ListQuickfix	brief (default) / with full path and column
+
+In |:ListPath| ~
+	<CR>			expand/collapse a folder, or open a file
+	l  <Right>		expand a folder; on an expanded folder, move
+				to its first child
+	h  <Left>		collapse the parent folder; at the top level,
+				go up to the parent directory
+	s			toggle files hidden by 'wildignore'
+	a			create a file in the folder under the cursor;
+				end the name with `/` to create a folder
+	m			rename
+	d			delete (asks for confirmation)
+	c			go back to the current working directory
+Create and rename refuse to overwrite an existing file or folder.
+
+In the input dialog ~
+	<Left>  <C-b>		character left
+	<Right>  <C-f>		character right
+	<Home>  <C-a>		start of line
+	<End>  <C-e>		end of line
+	<BS>  <C-h>		delete before the cursor
+	<Del>  <C-d>		delete under the cursor
+	<C-w>			delete the word before the cursor
+	<C-u>			clear
+	<CR>			search with the keyword
+	<Esc>			cancel
+Any text can be typed, including non-ASCII characters.
+
+==============================================================================
+5. Matching					*consistent_popup-matching*
+
+Keywords are plain text, never regular expressions, with "smart case": the
+match ignores case unless the keyword contains an uppercase letter. This is
+the same rule as the default `rg --smart-case --fixed-strings`, so all lists
+behave alike. For example, `readme` matches `README.md`, but `Readme` does
+not, and `.*` only matches a literal `.*`.
+
+==============================================================================
+6. Options					*consistent_popup-options*
+
+Set these in your |vimrc|. Options marked "at startup" are read when the
+plugin loads; the others are read each time they are used.
+
+					*g:consistent_popup_list_height_ratio*
+g:consistent_popup_list_height_ratio	(default: 0.55, at startup)
+	Height of the list as a fraction of the current window's height.
+
+				*g:consistent_popup_intercept_quickfix*
+g:consistent_popup_intercept_quickfix	(default: v:true)
+	See |consistent_popup-quickfix|.
+
+					*g:consistent_popup_highlights*
+g:consistent_popup_highlights		(default: see below, at startup)
+	Highlight groups for the text properties. Give only the ones to
+	change: >
+		g:consistent_popup_highlights = {
+		    FileStyle: 'Statement',      # file names in grep results
+		    MatchStyle: 'Underlined',    # the matched text
+		    DirectoryStyle: 'Type',      # folders in :ListPath
+		    InputCursorStyle: 'Directory', # cursor in the input dialog
+		}
+<
+					*g:consistent_popup_rg_cmd*
+g:consistent_popup_rg_cmd
+	Command for |:ListGrep|, as a list. The keyword and `.` are appended.
+	It must print ripgrep's `--json` output. Default: >
+		['rg', '--sort=path', '--follow', '--smart-case',
+		 '--fixed-strings', '--json', '--']
+<
+					*g:consistent_popup_find_cmd*
+g:consistent_popup_find_cmd
+	Command for |:ListFind|, as a string run by `/bin/sh -c`. The
+	shell-escaped keyword is appended. It must print ripgrep's `--json`
+	output. Default: >
+		'rg --files --sort=path | rg --smart-case --fixed-strings --json -- '
+<
+If the first word of either command is not an executable, the list shows an
+error instead of staying empty.
+
+					*g:consistent_popup_term_cmd*
+g:consistent_popup_term_cmd		(default: [&shell], at startup)
+	Command for |:ShowTerm|, as a list.
+
+					*g:consistent_popup_term_title*
+g:consistent_popup_term_title		(default: 'Terminal', at startup)
+
+					*g:consistent_popup_term_width*
+g:consistent_popup_term_width		(default: 0, at startup)
+	Width in columns; 0 uses the whole screen.
+
+				*g:consistent_popup_term_close_on_esc*
+g:consistent_popup_term_close_on_esc	(default: v:false, at startup)
+	Make <Esc> hide the terminal. Off by default so programs in the
+	terminal receive <Esc>.
+
+					*g:consistent_popup_assistant*
+g:consistent_popup_assistant		(default: {})
+	Settings for the assistant, as a dictionary. Read when the assistant
+	starts, and on each send for `startup_delay` and `bracketed_paste`.
+
+	cmd		(required) The assistant command, one of:
+			- a list of strings,
+			- a string, run as `[&shell, '-ic', cmd]`,
+			- a function that gets the project root (the current
+			  working directory) and returns a list.
+	title		Popup title. Default: 'Assistant'.
+	width		Width in columns. Default: 100.
+	startup_delay	Milliseconds to wait before sending the first snippet
+			to a just-started assistant. Default: 3000.
+	close_on_esc	Make <Esc> hide the popup. Default: v:false, so <Esc>
+			reaches the assistant (most use it to interrupt).
+	bracketed_paste	Wrap sent snippets in bracketed-paste sequences so
+			their newlines do not submit the prompt early.
+			Default: v:true. Turn it off for a program that does
+			not understand bracketed paste.
+
+	Example: >
+		vim9script
+		g:consistent_popup_assistant = {
+		    title: 'Coding Assistant',
+		    cmd: (root: string): list<string> => ['my-assistant', '--cwd', root],
+		}
+<
+==============================================================================
+7. Quickfix interception			*consistent_popup-quickfix*
+
+When |g:consistent_popup_intercept_quickfix| is true (the default), opening
+the quickfix or location list window (|:copen|, |:lopen|, or a plugin doing
+so) closes that window and opens |:ListQuickfix| or |:ListLoclist| instead.
+Set it to v:false to keep Vim's own windows: >
+	g:consistent_popup_intercept_quickfix = v:false
+<
+ vim:tw=78:ts=8:noet:ft=help:norl:

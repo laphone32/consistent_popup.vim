@@ -4,8 +4,11 @@ A lightweight, native Vim9 popup toolkit providing a unified popup UI for file f
 
 ## Requirements
 
-* **Vim 9.1+** (or Vim 9.0+ compiled with `+popupwin`, `+textprop`, `+terminal`, `+job`, `+channel`, `+timers`)
+* **Vim 9.1+** with `+popupwin`, `+textprop`, `+job`, `+channel` and `+timers`. Tested on Vim 9.1.0016 (Ubuntu 24.04) and newer; an older Vim shows one warning and the plugin stays disabled.
+  * `+terminal` is needed for `:ShowTerm` and the assistant commands only.
+  * Newer 9.1 patches are used when available: `getregion()` (otherwise `:AssistantSendVisual` yanks and restores the registers) and `base64_decode()` (otherwise grep results that are not valid UTF-8 are skipped).
 * **[ripgrep (`rg`)](https://github.com/BurntSushi/ripgrep)** (required for `:ListFind` and `:ListGrep`)
+* **A Unix-like system** (Linux, macOS). Commands run through `/bin/sh` and paths use `/`, so Windows is not supported.
 
 ## Installation
 
@@ -15,6 +18,8 @@ Using [vim-plug](https://github.com/junegunn/vim-plug):
 Plug 'laphone32/consistent_popup.vim'
 ```
 
+Full documentation: `:help consistent_popup`.
+
 ## Commands
 
 | Command | Description |
@@ -23,12 +28,12 @@ Plug 'laphone32/consistent_popup.vim'
 | `:ListGrep [keyword]` | Search file contents asynchronously via `rg` |
 | `:ListBuffer [keyword]` | Switch between listed buffers |
 | `:ListPath [keyword]` | Interactive directory tree / file manager |
-| `:ListQuickfix [keyword]` | Browse Quickfix list in popup |
-| `:ListLoclist [keyword]` | Browse Location list in popup |
+| `:ListQuickfix [keyword]` | Browse Quickfix list in popup (opens with `:cc`, so `:cnext` continues from the selection) |
+| `:ListLoclist [keyword]` | Browse Location list in popup (opens with `:ll`) |
 | `:ListResume` | Resume the last opened list popup |
 | `:ShowTerm` / `:HideTerm` | Show or hide the persistent floating terminal |
 | `:ShowAssistant` / `:HideAssistant` | Show or hide the floating coding assistant terminal |
-| `:AssistantSendVisual` | Send the current visual selection as a Markdown snippet to the assistant |
+| `:AssistantSendVisual` | Send the current visual selection (or `:{range}AssistantSendVisual` lines) as a Markdown snippet to the assistant |
 
 ### Popup Navigation & Keys
 
@@ -37,6 +42,7 @@ Plug 'laphone32/consistent_popup.vim'
   * `<CR>`: Open selected item (or expand/collapse directory in `:ListPath`)
   * `p`: Preview selected item in background window without closing popup
   * `/`: Edit search/filter query in input dialog
+    * Keywords are matched as fixed strings with smart case (case-insensitive unless the keyword contains an uppercase letter), the same as the default `rg` flags
   * `r`: Refresh current list
   * `<Left>` / `<Right>`: Switch display mode (e.g. full path vs. filename)
   * `<Esc>` / `q`: Hide popup
@@ -51,7 +57,7 @@ Plug 'laphone32/consistent_popup.vim'
 
 ## Configuration
 
-All settings are optional and can be configured via `g:consistent_popup_*` variables in your `vimrc`:
+All settings are optional and can be configured via `g:consistent_popup_*` variables in your `vimrc` (see `:help consistent_popup-options` for every option):
 
 ```vim
 vim9script
@@ -80,12 +86,15 @@ g:consistent_popup_highlights = {
 # g:consistent_popup_term_width = 0
 # g:consistent_popup_term_close_on_esc = v:false
 
-# Coding Assistant options
+# Coding Assistant options (all assistant settings live in this dictionary)
 g:consistent_popup_assistant = {
     title: 'Coding Assistant',
     width: 100,
     startup_delay: 3000,
-    close_on_esc: v:true,
+    # <Esc> hides the popup (default: v:false, so <Esc> reaches the agent, e.g. to interrupt)
+    close_on_esc: v:false,
+    # Wrap sent snippets in bracketed paste so newlines don't submit early (default: v:true)
+    bracketed_paste: v:true,
     cmd: (project_root: string): list<string> => {
         return ['bash', '-ic', 'agy --add-dir ' .. shellescape(project_root)]
     },

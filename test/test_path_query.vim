@@ -168,3 +168,109 @@ export def Test_PathQuery_FileCrudOperations()
         h.RemoveFixtureDir(dir)
     endtry
 enddef
+
+def FindIdx(p: pq.PathQuery, name: string): number
+    for i in range(1, len(p.lookup) - 1)
+        if p.lookup[i].name ==# name
+            return i
+        endif
+    endfor
+    return -1
+enddef
+
+export def Test_PathQuery_CreateAndRenameNeverOverwrite()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_cwd = getcwd()
+    try
+        execute 'cd ' .. fnameescape(dir)
+        var p = pq.PathQuery.new()
+        p.Start({ keyword: '' })
+        var readme = readfile(dir .. '/README.md')
+        var readme_idx = FindIdx(p, 'README.md')
+
+        # Creating a file whose name already exists must not truncate it
+        feedkeys("README.md\<CR>", 't')
+        silent p.OnListKey('a', readme_idx)
+        assert_equal(readme, readfile(dir .. '/README.md'), 'existing file must not be truncated')
+
+        # Renaming onto an existing name must not overwrite it
+        var tmp_idx = FindIdx(p, 'ignored.tmp')
+        feedkeys("\<C-u>README.md\<CR>", 't')
+        silent p.OnListKey('m', tmp_idx)
+        assert_equal(readme, readfile(dir .. '/README.md'), 'rename target must not be overwritten')
+        assert_true(filereadable(dir .. '/ignored.tmp'), 'rename source must stay in place')
+        assert_equal('ignored.tmp', p.lookup[tmp_idx].name, 'lookup must not change on failed rename')
+    finally
+        execute 'cd ' .. fnameescape(saved_cwd)
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_PathQuery_RenameExpandedDirUpdatesChildren()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_cwd = getcwd()
+    try
+        execute 'cd ' .. fnameescape(dir)
+        var p = pq.PathQuery.new()
+        p.Start({ keyword: '' })
+        var src_idx = FindIdx(p, 'src')
+        p.OnListKey('l', src_idx)
+        assert_true(p.lookup[src_idx].expanded)
+
+        feedkeys("\<C-u>lib\<CR>", 't')
+        p.OnListKey('m', src_idx)
+        assert_true(isdirectory(dir .. '/lib'))
+        assert_true(p.lookup[src_idx].expanded, 'renamed dir should stay expanded')
+        var hello_idx = FindIdx(p, 'hello.vim')
+        assert_equal(dir .. '/lib/hello.vim', p.lookup[hello_idx].path, 'child path should follow the rename')
+    finally
+        execute 'cd ' .. fnameescape(saved_cwd)
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_PathQuery_LiteralKeyword()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_cwd = getcwd()
+    try
+        execute 'cd ' .. fnameescape(dir)
+        var p = pq.PathQuery.new()
+        # '.' used to be a regex wildcard that matched every entry
+        p.Start({ keyword: '.md' })
+        assert_equal(['README.md'], mapnew(p.lookup[1 : ], (_, v) => v.name))
+        p.Start({ keyword: '[' })
+        assert_equal(1, len(p.lookup))
+    finally
+        execute 'cd ' .. fnameescape(saved_cwd)
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_PathQuery_TitleShowsAppliedFilter()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_cwd = getcwd()
+    try
+        execute 'cd ' .. fnameescape(dir)
+        var p = pq.PathQuery.new()
+        p.Start({ keyword: 'src' })
+        assert_match('(filter: src)', p.GetTitle('src'))
+
+        # Navigating restarts without the keyword: the title must follow
+        p.OnListKey('s', 1)
+        assert_notmatch('filter:', p.GetTitle('src'))
+
+        p.Start({ keyword: '' })
+        assert_notmatch('filter:', p.GetTitle(''))
+    finally
+        execute 'cd ' .. fnameescape(saved_cwd)
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef

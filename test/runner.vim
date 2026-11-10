@@ -34,7 +34,15 @@ for file in files
     var short_name = fnamemodify(file, ':t')
     Out("\n[" .. short_name .. ']')
 
-    execute 'source ' .. fnameescape(file)
+    # A test file that fails to load is a failure, not an aborted run
+    try
+        execute 'source ' .. fnameescape(file)
+    catch
+        Out('  ERROR loading ' .. short_name .. ': ' .. v:exception .. ' at ' .. v:throwpoint)
+        failure_details->add(short_name .. ' :: <load> -> ' .. v:exception)
+        total_failed += 1
+        continue
+    endtry
     var sinfo = getscriptinfo({ name: file })
     if empty(sinfo)
         Out('  ERROR: Could not resolve script info for ' .. short_name)

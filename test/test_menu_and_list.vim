@@ -186,6 +186,9 @@ export def Test_PluginCommands_AndQuickfixInterception()
         execute 'source ' .. fnameescape(ROOT_DIR .. '/plugin/consistent_popup.vim')
     endif
 
+    # The quickfix hook is script-local, not a global function
+    assert_false(exists('*g:InterceptQuickfixWindow'), 'no global function should be defined')
+
     # Verify all documented user commands exist
     for cmd in ['ListFind', 'ListGrep', 'ListBuffer', 'ListPath', 'ListQuickfix', 'ListLoclist', 'ListResume', 'ShowTerm', 'HideTerm', 'ShowAssistant', 'HideAssistant', 'AssistantSendVisual']
         assert_equal(2, exists(':' .. cmd), 'Command :' .. cmd .. ' should be registered')
@@ -205,5 +208,117 @@ export def Test_PluginCommands_AndQuickfixInterception()
     finally
         h.ResetState()
         h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_PluginCommands_RangeAndExitHooks()
+    h.ResetState()
+    if !exists('g:loaded_consistent_popup')
+        execute 'source ' .. fnameescape(ROOT_DIR .. '/plugin/consistent_popup.vim')
+    endif
+
+    # AssistantSendVisual must accept the '<,'> range inserted from visual mode
+    var listing = execute('command AssistantSendVisual')->split("\n")[-1]
+    assert_match('^\s*AssistantSendVisual\s\+0\s\+\.', listing, 'command should be defined with -range')
+
+    # Sessions are killed on exit only, not on every :q
+    assert_true(exists('#ConsistentPopupHooks#ExitPre'))
+    assert_false(exists('#ConsistentPopupHooks#QuitPre'))
+
+    var saved_shell = &shell
+    try
+        &shell = '/bin/sh'
+        ShowTerm
+        var term_bufs = term_list()
+        assert_equal(1, len(term_bufs))
+        HideTerm
+
+        split
+        quit
+        assert_true(bufexists(term_bufs[0]), 'closing a split with :q must not kill the terminal')
+    finally
+        &shell = saved_shell
+        for b in term_list()
+            silent! execute 'bwipeout! ' .. b
+        endfor
+        h.ResetState()
+    endtry
+enddef
+
+# Assert every visible popup lies within the current window's screen area
+def AssertPopupsInsideWindow(label: string)
+    var [row, col] = win_screenpos(0)
+    var bottom = row + winheight(0) - 1
+    var right = col + winwidth(0) - 1
+    var popups = h.GetVisiblePopups()
+    assert_true(len(popups) >= 2, label .. ': list and counter should be visible')
+    for id in popups
+        var p = popup_getpos(id)
+        assert_true(p.line >= row && p.line + p.height - 1 <= bottom,
+            printf('%s: popup rows %d-%d outside window rows %d-%d', label, p.line, p.line + p.height - 1, row, bottom))
+        assert_true(p.col >= col && p.col + p.width - 1 <= right,
+            printf('%s: popup cols %d-%d outside window cols %d-%d', label, p.col, p.col + p.width - 1, col, right))
+    endfor
+enddef
+
+export def Test_List_StaysInsideCurrentSplit()
+    h.ResetState()
+    h.EnsurePropTypes()
+    var list = li.List.new(0.5)
+    var bquery = bq.BufferQuery.new()
+    try
+        # Bottom split of a horizontal split
+        split
+        wincmd j
+        list.Call(bquery, { keyword: '' })
+        AssertPopupsInsideWindow('bottom split')
+        feedkeys("\<Esc>", 'xt')
+
+        # Right split of a vertical split
+        only
+        vsplit
+        wincmd l
+        list.Call(bquery, { keyword: '' })
+        AssertPopupsInsideWindow('right split')
+        feedkeys("\<Esc>", 'xt')
+
+        # Full window keeps the bottom-left anchor at the window's last line
+        only
+        list.Call(bquery, { keyword: '' })
+        var menu_id = h.GetVisiblePopups()->filter((_, id) => winbufnr(id) == bufnr('_listsBuffer_'))[0]
+        var p = popup_getpos(menu_id)
+        assert_equal(winheight(0), p.line + p.height - 1)
+        assert_equal(1, p.col)
+        feedkeys("\<Esc>", 'xt')
+    finally
+        h.ResetState()
+    endtry
+enddef
+
+export def Test_Menu_CounterFollowsCursor()
+    h.ResetState()
+    var buf = bufnr('_testIdleMenuBuf_', 1)
+    bufload(buf)
+    setbufvar(buf, '&buftype', 'nofile')
+    setbufline(buf, 1, ['alpha', 'beta', 'gamma'])
+    var menu = mu.Menu.new({ buffer: buf, zindex: 200 })
+    try
+        menu.Open({ pos: 'botleft', line: 10, minwidth: 20, maxwidth: 20 })
+        menu.Update()
+        var counter_buf = winbufnr(menu.id)
+        assert_equal([' 1 / 3 '], getbufline(counter_buf, 1, '$'))
+
+        # Repeated idle updates keep it unchanged (they are skipped internally)
+        menu.Update()
+        assert_equal([' 1 / 3 '], getbufline(counter_buf, 1, '$'))
+
+        # Cursor moved: it is updated
+        win_execute(menu.menuArea.Get(), 'normal! j')
+        menu.Update()
+        assert_equal([' 2 / 3 '], getbufline(counter_buf, 1, '$'))
+    finally
+        menu.Hide()
+        silent! execute 'bwipeout! ' .. buf
+        h.ResetState()
     endtry
 enddef

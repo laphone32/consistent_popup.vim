@@ -1,10 +1,14 @@
 vim9script
 
 import "./queryType.vim" as qt
+import "./util.vim" as ut
 
 export class PathQuery extends qt.QueryType
     var currentPath: string
     var showAll: bool = v:false
+    # Keyword actually applied by the last Start(); navigation keys restart
+    # without it, so the title must not show the originally typed one.
+    var _activeKeyword: string = ''
 
     def _FormatMode(line: number): dict<any>
         var data = this.lookup[line]
@@ -60,14 +64,15 @@ export class PathQuery extends qt.QueryType
                     return v:false
                 endif
             endif
-            return len(keyword) == 0 || entry.name =~? keyword
+            return ut.Matches(entry.name, keyword)
         }
     enddef
 
     def GetTitle(keyword: string): string
         var status = this.showAll ? '(all) ' : ''
         var toggle_prompt = this.showAll ? 's:filter' : 's:all'
-        return ' ' .. status .. 'path: ' .. this.currentPath .. ' [' .. toggle_prompt .. '/a:add/m:modify/d:delete/c:current/r:refresh] '
+        var filter = empty(this._activeKeyword) ? '' : $'(filter: {this._activeKeyword}) '
+        return ' ' .. status .. 'path: ' .. this.currentPath .. ' ' .. filter .. '[' .. toggle_prompt .. '/a:add/m:modify/d:delete/c:current/r:refresh] '
     enddef
 
     def HasCustomKey(key: string): bool
@@ -76,6 +81,7 @@ export class PathQuery extends qt.QueryType
 
     def Start(query: dict<any>): bool
         var keyword = query->get('keyword', '')
+        this._activeKeyword = keyword
         var keep_path = query->get('keepPath', v:false)
         var active_file = resolve(expand('%:p'))
 
@@ -298,8 +304,7 @@ export class PathQuery extends qt.QueryType
                     this._ToggleDir(line)
                     return v:false
                 else
-                    this.OpenFile(data.path)
-                    return v:true
+                    return this.OpenFile(data.path)
                 endif
             elseif key ==# 'm'
                 this.ModifyFileOrDir(line)
@@ -342,10 +347,30 @@ export class PathQuery extends qt.QueryType
         endif
         fullpath ..= name
 
-        if name =~# '/$'
-            mkdir(fullpath, 'p')
-        else
-            writefile([], fullpath)
+        # Never touch an existing entry: writefile() would truncate a file
+        if this._Exists(substitute(fullpath, '/\+$', '', ''))
+            ut.Error('already exists: ' .. fullpath)
+            return
+        endif
+
+        var ok = v:false
+        try
+            if name =~# '/$'
+                ok = mkdir(fullpath, 'p') == 1
+            else
+                # Parent dirs for names like "new/dir/file.txt"
+                var parent = fnamemodify(fullpath, ':h')
+                if !isdirectory(parent)
+                    mkdir(parent, 'p')
+                endif
+                ok = writefile([], fullpath) == 0
+            endif
+        catch
+            ok = v:false
+        endtry
+        if !ok
+            ut.Error('failed to create: ' .. fullpath)
+            return
         endif
 
         if line < len(this.lookup) && !empty(this.lookup[line]) && this.lookup[line].isdir
@@ -372,10 +397,32 @@ export class PathQuery extends qt.QueryType
             parent ..= '/'
         endif
         var new_path = parent .. new_name
-        rename(data.path, new_path)
+        # rename() silently overwrites an existing target
+        if this._Exists(new_path)
+            ut.Error('already exists: ' .. new_path)
+            return
+        endif
+        if rename(data.path, new_path) != 0
+            ut.Error('failed to rename: ' .. data.path)
+            return
+        endif
+
+        # Collapse first so children (with stale paths) are dropped, then re-expand
+        var was_expanded = data.isdir && data.expanded
+        if was_expanded
+            this._CollapseDir(line)
+        endif
         data.name = new_name
         data.path = new_path
+        if was_expanded
+            this._ExpandDir(line)
+        endif
         this.Refresh(line)
+    enddef
+
+    def _Exists(path: string): bool
+        # getftype() also detects broken symlinks
+        return !empty(getftype(path))
     enddef
 
     def DeleteFileOrDir(line: number)
@@ -386,7 +433,10 @@ export class PathQuery extends qt.QueryType
             if data.isdir && data.expanded
                 this._CollapseDir(line)
             endif
-            delete(data.path, 'rf')
+            if delete(data.path, data.isdir ? 'rf' : '') != 0
+                ut.Error('failed to delete: ' .. data.path)
+                return
+            endif
             this.lookup->remove(line)
             this.Refresh(line)
         endif

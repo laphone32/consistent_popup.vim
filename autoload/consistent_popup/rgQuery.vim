@@ -1,6 +1,9 @@
 vim9script
 
 import "./asyncQuery.vim" as aq
+# Not used here directly, but required: on older Vim (e.g. 9.1.0016) the
+# base class member initializer `aj.AsyncJob.new()` is compiled in this
+# script's context, so it fails with "E1001: Variable not found: aj".
 import "./asyncJob.vim" as aj
 
 export class AsyncRgQuery extends aq.AsyncQuery
@@ -41,12 +44,14 @@ export class AsyncRgQuery extends aq.AsyncQuery
 
     def Start(query: dict<any>): bool
         var keyword = query->get('keyword', '')
+        this._Reset()
         if len(keyword) > 0
-            this.lookup = [{}]
             var base_cmd = get(g:, 'consistent_popup_rg_cmd', ['rg', '--sort=path', '--follow', '--smart-case', '--fixed-strings', '--json', '--'])
-            this.asyncJob.Start({
-                cmd: copy(base_cmd)->extend([keyword, '.']),
-            })
+            if this._CheckExecutable(get(base_cmd, 0, ''))
+                this.asyncJob.Start({
+                    cmd: copy(base_cmd)->extend([keyword, '.']),
+                })
+            endif
         endif
 
         return len(keyword) > 0
@@ -60,8 +65,7 @@ export class AsyncRgQuery extends aq.AsyncQuery
                 if has_key(data, 'submatches') && len(data.submatches) > 0
                     start_col = data.submatches[0].start + 1
                 endif
-                this.OpenFile(data.path.text, data.line_number, start_col)
-                return v:true
+                return this.OpenFile(data.path.text, data.line_number, start_col)
             endif
         endif
         return v:true

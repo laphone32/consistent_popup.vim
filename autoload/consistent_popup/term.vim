@@ -10,6 +10,7 @@ export class Term extends cp.ConsistentPopup
     var closeOnEscCmd: string
     var width: number
     var saved_ambiwidth: string
+    var _generation: number = 0
 
     def new(cmd: list<string> = [], title: string = 'Terminal', closeOnEscCmd: string = '', width: number = 0)
         this.cmd = cmd
@@ -26,23 +27,41 @@ export class Term extends cp.ConsistentPopup
         var rows = &lines - 4
         var actual_cmd = !empty(this.cmd) ? this.cmd : [&shell]
 
+        # A late exit_cb from a killed job must not affect a newer terminal
+        this._generation += 1
+        var gen = this._generation
         this.buffer = term_start(actual_cmd, {
             hidden: 1,
             term_finish: 'close',
             exit_cb: (j, s) => {
-                this.buffer = -1
+                if gen == this._generation
+                    this.buffer = -1
+                    # Popup goes away with the buffer; restore state too
+                    this.Hide()
+                endif
             },
             term_rows: rows,
             term_cols: cols,
         })
     enddef
 
+    def IsShown(): bool
+        return this.id > 0 && !empty(popup_getpos(this.id))
+    enddef
+
     def Show(properties: dict<any> = {})
+        # Already open: don't stack a second popup or clobber saved_ambiwidth
+        if this.IsShown()
+            return
+        endif
+
         if this.buffer <= 0 || !bufexists(this.buffer)
             this._CreateBuffer()
         endif
 
-        this.saved_ambiwidth = &ambiwidth
+        if empty(this.saved_ambiwidth)
+            this.saved_ambiwidth = &ambiwidth
+        endif
         &ambiwidth = 'single'
 
         # The popup minwidth/minheight must EXACTLY match the term_cols/term_rows
@@ -66,7 +85,7 @@ export class Term extends cp.ConsistentPopup
 
     def Hide()
         if this.id > 0
-            popup_close(this.id)
+            silent! popup_close(this.id)
             this.id = 0
         endif
         if !empty(this.saved_ambiwidth)

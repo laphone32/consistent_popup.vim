@@ -1,5 +1,7 @@
 vim9script
 
+import "./util.vim" as ut
+
 export class QueryType
     public var name: string = ' Query > '
     public var lookup: list<any> = [{}]
@@ -21,10 +23,36 @@ export class QueryType
         return v:false
     enddef
 
+    # Run a buffer-switching {cmd}. `silent!` keeps swap-file prompts and
+    # "written" messages out of the popup, but a failure (e.g. E37 on a
+    # modified buffer with 'nohidden') is reported instead of swallowed.
+    # {Done} tells whether the switch really happened.
+    def SwitchTo(cmd: string, Done: func(): bool): bool
+        v:errmsg = ''
+        execute 'silent! ' .. cmd
+        if Done()
+            return v:true
+        endif
+        ut.Error(empty(v:errmsg) ? 'failed: ' .. cmd : v:errmsg)
+        return v:false
+    enddef
+
+    # Edit {path} in the current window. Returns false when the edit did not
+    # happen, so callers never change options of the wrong buffer.
+    def _EditFile(path: string): bool
+        var prev = bufnr('%')
+        return this.SwitchTo('edit ' .. fnameescape(path), () => bufnr('%') != prev
+            || fnamemodify(bufname('%'), ':p') ==# fnamemodify(path, ':p'))
+    enddef
+
     def PreviewFile(path: string, line_num: number = 1, col: number = 1)
         var was_listed = buflisted(path)
-        execute 'silent! edit ' .. fnameescape(path)
-        if !was_listed
+        if !this._EditFile(path)
+            return
+        endif
+        if !was_listed && !isdirectory(path)
+            # Mark it so OpenFile() knows these options were set by us
+            b:consistent_popup_preview = 1
             setlocal nobuflisted
             setlocal noswapfile
         endif
@@ -32,16 +60,29 @@ export class QueryType
         redraw
     enddef
 
-    def OpenFile(path: string, line_num: number = 1, col: number = 1)
-        execute 'silent! edit ' .. fnameescape(path)
+    # Returns false when the file could not be opened, so the list stays open.
+    def OpenFile(path: string, line_num: number = 1, col: number = 1): bool
+        if !this._EditFile(path)
+            return v:false
+        endif
         if isdirectory(path)
             setlocal nobuflisted
             setlocal noswapfile
         else
-            setlocal buflisted
-            setlocal swapfile
+            this.ClaimBuffer()
         endif
         cursor(line_num, col)
+        return v:true
+    enddef
+
+    # The current buffer was really opened (not just previewed): undo only
+    # what PreviewFile() changed, respecting the user's global 'swapfile'.
+    def ClaimBuffer()
+        if exists('b:consistent_popup_preview')
+            unlet b:consistent_popup_preview
+            setlocal buflisted
+            setlocal swapfile<
+        endif
     enddef
 
     def Start(query: dict<any>): bool

@@ -77,6 +77,57 @@ export def Test_QueryType_OpenAndPreviewFile()
     endtry
 enddef
 
+export def Test_QueryType_OpenFileRespectsGlobalNoswapfile()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_swf = &g:swapfile
+    try
+        set noswapfile
+        var q = qt.QueryType.new()
+        var target = dir .. '/src/sub/notes.txt'
+
+        # Preview, then open: must not force 'swapfile' on against the user's global setting
+        q.PreviewFile(target)
+        q.OpenFile(target)
+        assert_true(&buflisted)
+        assert_false(&l:swapfile, 'OpenFile must not enable swapfile when the user disabled it')
+
+        # A plain open of a new file must not touch it either
+        q.OpenFile(dir .. '/README.md')
+        assert_false(&l:swapfile)
+    finally
+        &g:swapfile = saved_swf
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_QueryType_FailedEditLeavesCurrentBufferAlone()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_hidden = &hidden
+    try
+        set nohidden
+        var q = qt.QueryType.new()
+        execute 'edit ' .. fnameescape(dir .. '/README.md')
+        setline(1, 'unsaved change')
+        var buf = bufnr('%')
+        assert_true(&buflisted)
+        assert_true(&l:swapfile)
+
+        # :edit fails with E37, so the modified buffer's options must stay untouched
+        q.PreviewFile(dir .. '/src/sub/notes.txt')
+        assert_equal(buf, bufnr('%'))
+        assert_true(&buflisted, 'modified buffer must stay listed')
+        assert_true(&l:swapfile, 'modified buffer must keep its swapfile')
+    finally
+        &hidden = saved_hidden
+        silent! set nomodified
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
 export def Test_NativeListQuery_FormattingAndFiltering()
     h.ResetState()
     var dir = h.CreateFixtureDir()
@@ -167,6 +218,139 @@ export def Test_BufferQuery_ListingFilteringAndNavigation()
         assert_equal(buf1, bufnr('%'))
     finally
         &hidden = saved_hidden
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_Queries_LiteralKeywordNeverThrows()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_hidden = &hidden
+    try
+        set hidden
+        execute 'silent! edit ' .. fnameescape(dir .. '/src/hello.vim')
+        execute 'silent! edit ' .. fnameescape(dir .. '/README.md')
+
+        # Regex metacharacters used to raise errors (E54/E769); now literal
+        var bquery = bq.BufferQuery.new()
+        for kw in ['[', '\(', '*']
+            assert_true(bquery.Start({ keyword: kw }))
+            assert_equal(1, len(bquery.lookup), 'no buffer contains ' .. kw)
+        endfor
+
+        # Same smart-case rule as rg: lowercase matches any case,
+        # uppercase is case-sensitive; highlight covers the literal match
+        bquery.Start({ keyword: 'readme' })
+        assert_equal(2, len(bquery.lookup))
+        bquery.Start({ keyword: 'Readme' })
+        assert_equal(1, len(bquery.lookup))
+        bquery.Start({ keyword: 'README' })
+        assert_equal(2, len(bquery.lookup))
+        var rendered = bquery.modes[0](1)
+        var loc = rendered.props[0].location[0]
+        assert_equal('README', rendered.text[loc[1] - 1 : loc[3] - 2])
+
+        setqflist([
+            { filename: dir .. '/README.md', lnum: 1, text: 'has [brackets] here' },
+            { filename: dir .. '/src/hello.vim', lnum: 2, text: 'plain' },
+        ], 'r')
+        var qf = nq.NativeListQuery.new(' qf > ', (q) => getqflist())
+        qf.Start({ keyword: '[brackets]' })
+        assert_equal(2, len(qf.lookup))
+        assert_equal('has [brackets] here', qf.lookup[1].text)
+    finally
+        &hidden = saved_hidden
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_Queries_ReportFailedSwitchAndKeepListOpen()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_hidden = &hidden
+    try
+        set hidden
+        execute 'silent! edit ' .. fnameescape(dir .. '/src/hello.vim')
+        var other = bufnr('%')
+        execute 'silent! edit ' .. fnameescape(dir .. '/README.md')
+        setline(1, 'unsaved change')
+        set nohidden
+
+        # Switching buffers fails with E37: report it and keep the list open
+        var bquery = bq.BufferQuery.new()
+        bquery.Start({ keyword: 'hello' })
+        v:errmsg = ''
+        assert_false(bquery.OnListKey("\<cr>", 1), 'list should stay open when switching fails')
+        assert_match('E37', v:errmsg)
+        assert_notequal(other, bufnr('%'))
+
+        # Same for opening a file
+        var q = qt.QueryType.new()
+        v:errmsg = ''
+        assert_false(q.OpenFile(dir .. '/src/sub/notes.txt'))
+        assert_match('E37', v:errmsg)
+    finally
+        &hidden = saved_hidden
+        silent! set nomodified
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_NativeListQuery_JumpsThroughQuickfixAndLoclist()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_hidden = &hidden
+    try
+        set hidden
+        var file1 = dir .. '/src/hello.vim'
+        var file2 = dir .. '/README.md'
+        var file3 = dir .. '/src/sub/notes.txt'
+        setqflist([
+            { filename: file1, lnum: 2, col: 8, text: 'first' },
+            { filename: file2, lnum: 2, col: 6, text: 'second' },
+            { filename: file3, lnum: 3, col: 1, text: 'third' },
+        ], 'r')
+
+        var qf = nq.NativeListQuery.new(' quickfix > ', (_) => getqflist(), 'cc')
+
+        # Filter so list line 1 is quickfix item 2, preview it, then open it
+        qf.Start({ keyword: 'second' })
+        assert_equal(2, len(qf.lookup))
+        qf.Preview(1)
+        assert_false(&buflisted)
+        assert_true(qf.OnListKey("\<cr>", 1))
+        assert_equal(resolve(file2), resolve(expand('%:p')))
+        assert_equal([2, 6], [line('.'), col('.')])
+        assert_equal(2, getqflist({ idx: 0 }).idx, 'quickfix index should follow the selection')
+        assert_true(&buflisted, 'previewed buffer should become listed once opened')
+
+        # :cnext continues from the selected item
+        cnext
+        assert_equal(resolve(file3), resolve(expand('%:p')))
+
+        # Location list uses :ll on the current window's list
+        setloclist(0, [
+            { filename: file1, lnum: 1, text: 'loc one' },
+            { filename: file3, lnum: 2, text: 'loc two' },
+        ], 'r')
+        var loc = nq.NativeListQuery.new(' loclist > ', (_) => getloclist(0), 'll')
+        loc.Start({ keyword: '' })
+        assert_true(loc.OnListKey("\<cr>", 2))
+        assert_equal(resolve(file3), resolve(expand('%:p')))
+        assert_equal(2, getloclist(0, { idx: 0 }).idx)
+
+        # A failed jump (E37) keeps the list open and reports the error
+        set nohidden
+        setline(1, 'unsaved change')
+        v:errmsg = ''
+        assert_false(qf.OnListKey("\<cr>", 1))
+        assert_match('E37', v:errmsg)
+    finally
+        &hidden = saved_hidden
+        silent! set nomodified
         h.ResetState()
         h.RemoveFixtureDir(dir)
     endtry

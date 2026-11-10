@@ -65,17 +65,22 @@ export class List
         this._dirty = v:true
     enddef
 
+    # Geometry of the current window in screen coordinates: [bottom screen
+    # line, left screen column, content width, list height]. Using the
+    # window's screen position keeps the popup inside a bottom/right split.
     def _Position(): list<number>
+        var [row, col] = win_screenpos(0)
         var height = winheight(0)
-        return [height, winwidth(0) - 5, float2nr(height * this._heightRatio)]
+        return [row + height - 1, col, winwidth(0) - 5, float2nr(height * this._heightRatio)]
     enddef
 
     def _MenuPosition(): dict<any>
-        var [height, width, popupHeight] = this._Position()
+        var [bottom, col, width, popupHeight] = this._Position()
 
         return {
             pos: 'botleft',
-            line: height,
+            line: bottom,
+            col: col,
             maxheight: popupHeight,
             minheight: popupHeight,
             maxwidth: width,
@@ -86,11 +91,12 @@ export class List
     enddef
 
     def _DialogPosition(): dict<any>
-        var [height, width, popupHeight] = this._Position()
+        var [bottom, col, width, popupHeight] = this._Position()
 
         return {
             pos: 'botleft',
-            line: height - popupHeight,
+            line: bottom - popupHeight,
+            col: col,
             maxwidth: width,
             minwidth: width,
             title: this.currentQueryType.name,
@@ -105,7 +111,7 @@ export class List
             var win_id = this._menu.menuArea.Get()
             var target = currentQueryType.cursorLine
             if line('$', win_id) >= target
-                var [height, width, popupHeight] = this._Position()
+                var popupHeight = this._Position()[3]
                 var fl = max([1, target - float2nr(popupHeight / 2)])
                 popup_setoptions(win_id, { firstline: fl })
                 win_execute(win_id, 'cursor(' .. target .. ', 1)')

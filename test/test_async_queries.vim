@@ -134,3 +134,113 @@ export def Test_AsyncFindQuery_RealRipgrepAndModes()
         h.RemoveFixtureDir(dir)
     endtry
 enddef
+
+export def Test_AsyncJob_RestartDropsStaleOutput()
+    var lines: list<string> = []
+    var job = aj.AsyncJob.new({
+        onData: (msg: string) => {
+            lines->add(msg)
+        },
+    })
+
+    # The first job floods output; restarting must discard anything it
+    # already queued on its channel.
+    job.Start({ cmd: ['/bin/sh', '-c', 'echo old; echo old; echo old'] })
+    # Let the old job write into the pipe without Vim reading its channel
+    # (system() blocks without running channel callbacks)
+    system('sleep 0.2')
+    assert_equal([], lines, 'precondition: old output is still queued')
+    job.Start({ cmd: ['/bin/sh', '-c', 'sleep 0.1; echo new'] })
+
+    var done = h.WaitFor(() => index(lines, 'new') >= 0, 3000)
+    sleep 100m
+    job.Stop()
+
+    assert_true(done, 'new job output should arrive')
+    assert_equal(['new'], lines, 'output of the stopped job must be dropped')
+enddef
+
+export def Test_AsyncRgQuery_NonUtf8PathAndLine()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_cwd = getcwd()
+    try
+        # latin1 file name and content: rg reports them as base64 "bytes"
+        var name = 'lat' .. printf('%c', 0xe9) .. 'n.txt'
+        writefile(['caf' .. printf('%c', 0xe9) .. ' latin_token here'], dir .. '/' .. name)
+        execute 'cd ' .. fnameescape(dir)
+
+        var rg = rq.AsyncRgQuery.new()
+        rg.Start({ keyword: 'latin_token' })
+        if !exists('*base64_decode')
+            # Older Vim (e.g. 9.1.0016): cannot decode, so the match is
+            # skipped quietly instead of throwing in the job callback
+            h.WaitFor(() => len(rg.lookup) > 1, 1000)
+            assert_equal([{}], rg.lookup)
+            return
+        endif
+        assert_true(h.WaitFor(() => len(rg.lookup) == 2, 3000), 'non-UTF-8 match must not be dropped or crash')
+        var data = rg.lookup[1]
+        assert_equal('./' .. name, data.path.text)
+        assert_true(filereadable(data.path.text), 'decoded path must be the real file name')
+        assert_match('latin_token', rg.modes[0](1).text)
+
+        # Submatch byte offsets still point at the match in the raw bytes
+        var start = data.submatches[0].start
+        assert_equal('latin_token', strpart(data.lines.text, start, len('latin_token')))
+
+        assert_true(rg.OnListKey("\<cr>", 1))
+        assert_equal(resolve(dir .. '/' .. name), resolve(expand('%:p')))
+    finally
+        execute 'cd ' .. fnameescape(saved_cwd)
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef
+
+export def Test_AsyncQueries_MissingExecutableIsReported()
+    var saved_rg = get(g:, 'consistent_popup_rg_cmd', v:none)
+    var saved_find = get(g:, 'consistent_popup_find_cmd', v:none)
+    try
+        g:consistent_popup_rg_cmd = ['no_such_rg_binary', '--json', '--']
+        v:errmsg = ''
+        var rg = rq.AsyncRgQuery.new()
+        silent rg.Start({ keyword: 'x' })
+        assert_match('"no_such_rg_binary" not found', v:errmsg)
+        assert_equal([{}], rg.lookup)
+
+        g:consistent_popup_find_cmd = 'no_such_rg_binary --files | rg --json -- '
+        v:errmsg = ''
+        var fq_inst = fq.AsyncFindQuery.new()
+        silent fq_inst.Start({ keyword: 'x' })
+        assert_match('"no_such_rg_binary" not found', v:errmsg)
+    finally
+        unlet! g:consistent_popup_rg_cmd g:consistent_popup_find_cmd
+        if saved_rg != v:none
+            g:consistent_popup_rg_cmd = saved_rg
+        endif
+        if saved_find != v:none
+            g:consistent_popup_find_cmd = saved_find
+        endif
+    endtry
+enddef
+
+export def Test_AsyncRgQuery_EmptyKeywordClearsOldResults()
+    h.ResetState()
+    var dir = h.CreateFixtureDir()
+    var saved_cwd = getcwd()
+    try
+        execute 'cd ' .. fnameescape(dir)
+        var rg = rq.AsyncRgQuery.new()
+        rg.Start({ keyword: 'match_token' })
+        assert_true(h.WaitFor(() => len(rg.lookup) >= 3, 3000))
+
+        # Refreshing with an empty keyword must not keep the old entries
+        assert_false(rg.Start({ keyword: '' }))
+        assert_equal([{}], rg.lookup)
+    finally
+        execute 'cd ' .. fnameescape(saved_cwd)
+        h.ResetState()
+        h.RemoveFixtureDir(dir)
+    endtry
+enddef

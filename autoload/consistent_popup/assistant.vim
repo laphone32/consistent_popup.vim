@@ -11,7 +11,7 @@ export class Assistant
 
     def _ResolveCmd(): list<string>
         var cfg = this._GetConfig()
-        var Cfg = get(cfg, 'cmd', get(g:, 'Consistent_popup_assistant_cmd', get(g:, 'consistent_popup_assistant_cmd', v:none)))
+        var Cfg = get(cfg, 'cmd', v:none)
         var root = getcwd()
         if type(Cfg) == v:t_func
             return Cfg(root)
@@ -31,9 +31,10 @@ export class Assistant
                 return null_object
             endif
             var cfg = this._GetConfig()
-            var title = get(cfg, 'title', get(g:, 'consistent_popup_assistant_title', 'Assistant'))
-            var width = get(cfg, 'width', get(g:, 'consistent_popup_assistant_width', 100))
-            var close_cmd = get(cfg, 'close_on_esc', get(g:, 'consistent_popup_assistant_close_on_esc', v:true)) ? 'HideAssistant' : ''
+            var title = get(cfg, 'title', 'Assistant')
+            var width = get(cfg, 'width', 100)
+            # Off by default: CLI agents use <Esc> to interrupt a running turn
+            var close_cmd = get(cfg, 'close_on_esc', v:false) ? 'HideAssistant' : ''
             this.term = te.Term.new(cmd, title, close_cmd, width)
         endif
         return this.term
@@ -58,7 +59,40 @@ export class Assistant
         endif
     enddef
 
-    def SendVisual()
+    # Text of the last visual selection (charwise, linewise or blockwise).
+    def _VisualLines(): list<string>
+        if exists('*getregion')
+            # Called by name: a direct call would fail to compile on Vims
+            # without getregion() (e.g. Ubuntu 24.04's 9.1.0016)
+            return call('getregion', [getpos("'<"), getpos("'>"), { type: visualmode() }])
+        endif
+
+        # Older Vim: yank, then restore every register the yank can touch
+        var regs = ['0', '"']
+        if &clipboard =~# 'unnamedplus'
+            regs->insert('+')
+        endif
+        if &clipboard =~# 'unnamed\%(plus\)\@!'
+            regs->insert('*')
+        endif
+        var saved = regs->mapnew((_, r) => getreginfo(r))
+        normal! gvy
+        var text = getreg('"')
+        var linewise = getregtype('"') ==# 'V'
+        # Restore in order; '"' last so it points where it pointed before
+        for i in range(len(regs))
+            setreg(regs[i], saved[i])
+        endfor
+        if linewise
+            text = substitute(text, '\n$', '', '')
+        endif
+        return split(text, "\n", 1)
+    enddef
+
+    # Send the last visual selection as a Markdown snippet. When an explicit
+    # range other than '<,'> is given (e.g. :10,20AssistantSendVisual), send
+    # those whole lines instead.
+    def SendVisual(range: number = 0, line1: number = -1, line2: number = -1)
         # 1. Gather file relative path and type
         var file_path = expand('%:.')
         var file_type = &filetype
@@ -66,16 +100,18 @@ export class Assistant
             file_path = '[No Name]'
         endif
 
-        # 2. Get line range of selection
+        # 2. Read the text without yanking, so no register or clipboard changes
         var start_line = line("'<")
         var end_line = line("'>")
-
-        # 3. Yank selection to register without polluting user clipboard
-        var saved_reg = getreg('"')
-        var saved_type = getregtype('"')
-        normal! gvy
-        var text = getreg('"')
-        setreg('"', saved_reg, saved_type)
+        var lines: list<string>
+        if range > 0 && (line1 != start_line || line2 != end_line)
+            start_line = line1
+            end_line = line2
+            lines = getline(line1, line2)
+        elseif start_line > 0 && !empty(visualmode())
+            lines = this._VisualLines()
+        endif
+        var text = join(lines, "\n")
 
         if empty(text)
             return
@@ -83,27 +119,34 @@ export class Assistant
 
         var is_first_start = (this.term == null_object || this.term.buffer <= 0 || !bufexists(this.term.buffer))
 
-        # 4. Open/Get the assistant popup
+        # 3. Open/Get the assistant popup
         var t = this.GetTerm()
         if t == null_object
             return
         endif
         t.Show()
 
-        # 5. Format prompt with markdown header and code block
+        # 4. Format prompt with markdown header and code block
         var header = $"Code snippet from `{file_path}` (lines {start_line}-{end_line}):\n"
         var code_block = $"```{file_type}\n{text}\n```\n"
         var prompt = header .. code_block
 
-        # 6. Feed context into terminal
+        # 5. Feed context into terminal. Bracketed paste makes the agent treat
+        # the newlines as part of the input instead of pressing Enter per line.
         var cfg = this._GetConfig()
-        var delay = get(cfg, 'startup_delay', get(g:, 'consistent_popup_assistant_startup_delay', 3000))
+        if get(cfg, 'bracketed_paste', v:true)
+            prompt = "\<Esc>[200~" .. prompt .. "\<Esc>[201~"
+        endif
+        var delay = get(cfg, 'startup_delay', 3000)
+        var buf = t.buffer
         if is_first_start && delay > 0
             timer_start(delay, (_) => {
-                term_sendkeys(t.buffer, prompt)
+                if bufexists(buf)
+                    term_sendkeys(buf, prompt)
+                endif
             })
         else
-            term_sendkeys(t.buffer, prompt)
+            term_sendkeys(buf, prompt)
         endif
     enddef
 endclass

@@ -1,9 +1,14 @@
 vim9script
 
 import "./queryType.vim" as qt
+import "./util.vim" as ut
 
 export class NativeListQuery extends qt.QueryType
     public var GetItems: func(dict<any>): list<dict<any>>
+    # 'cc' (quickfix) or 'll' (location list): jump through the native list so
+    # its current index follows the selection (:cnext continues from there)
+    # and 'switchbuf'/vcol are honoured. Empty: just open the file.
+    public var jumpCmd: string
 
     def _BriefMode(line: number): dict<any>
         var data = this.lookup[line]
@@ -22,9 +27,10 @@ export class NativeListQuery extends qt.QueryType
         })
     enddef
 
-    def new(name: string, GetItems: func(dict<any>): list<dict<any>>)
+    def new(name: string, GetItems: func(dict<any>): list<dict<any>>, jumpCmd: string = '')
         this.name = name
         this.GetItems = GetItems
+        this.jumpCmd = jumpCmd
         this.modes = [
             (line) => this._BriefMode(line),
             (line) => this._DetailedMode(line),
@@ -60,10 +66,11 @@ export class NativeListQuery extends qt.QueryType
                 col: col,
                 text: text,
                 type: item_type,
-                idx: item_index
+                idx: item_index,
+                bufnr: get(item, 'bufnr', 0),
             }
 
-            if empty(keyword) || entry.text =~? keyword || entry.path =~? keyword || entry.filename =~? keyword
+            if ut.Matches(entry.text, keyword) || ut.Matches(entry.path, keyword)
                 this.lookup->add(entry)
             endif
 
@@ -79,12 +86,26 @@ export class NativeListQuery extends qt.QueryType
             if key ==# "\<cr>"
                 var data = this.lookup[line]
                 if !empty(data) && !empty(data.path)
-                    this.OpenFile(data.path, data.line, data.col)
+                    if empty(this.jumpCmd)
+                        return this.OpenFile(data.path, data.line, data.col)
+                    endif
+                    return this._Jump(data)
                 endif
                 return v:true
             endif
         endif
         return v:true
+    enddef
+
+    def _Jump(data: dict<any>): bool
+        var target = data.bufnr > 0 ? data.bufnr : bufnr(data.path)
+        var ok = this.SwitchTo(this.jumpCmd .. ' ' .. data.idx, () => target > 0
+            ? bufnr('%') == target
+            : fnamemodify(bufname('%'), ':p') ==# fnamemodify(data.path, ':p'))
+        if ok
+            this.ClaimBuffer()
+        endif
+        return ok
     enddef
 
     def Preview(line: number)

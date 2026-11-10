@@ -1,6 +1,9 @@
 vim9script
 
 import "./asyncQuery.vim" as aq
+# Not used here directly, but required: on older Vim (e.g. 9.1.0016) the
+# base class member initializer `aj.AsyncJob.new()` is compiled in this
+# script's context, so it fails with "E1001: Variable not found: aj".
 import "./asyncJob.vim" as aj
 
 export class AsyncFindQuery extends aq.AsyncQuery
@@ -34,12 +37,14 @@ export class AsyncFindQuery extends aq.AsyncQuery
 
     def Start(query: dict<any>): bool
         var keyword = query->get('keyword', '')
+        this._Reset()
         if len(keyword) > 0
-            this.lookup = [{}]
             var base_cmd = get(g:, 'consistent_popup_find_cmd', 'rg --files --sort=path | rg --smart-case --fixed-strings --json -- ')
-            this.asyncJob.Start({
-                \ cmd: ['/bin/sh', '-c', base_cmd .. shellescape(keyword)],
-            \ })
+            if this._CheckExecutable(get(split(base_cmd), 0, ''))
+                this.asyncJob.Start({
+                    cmd: ['/bin/sh', '-c', base_cmd .. shellescape(keyword)],
+                })
+            endif
         endif
 
         return len(keyword) > 0
@@ -48,8 +53,7 @@ export class AsyncFindQuery extends aq.AsyncQuery
     def OnListKey(key: string, line: number): bool
         if line < len(this.lookup)
             if key ==# "\<cr>"
-                this.OpenFile(this.lookup[line].lines.text)
-                return v:true
+                return this.OpenFile(this.lookup[line].lines.text)
             endif
         endif
         return v:true

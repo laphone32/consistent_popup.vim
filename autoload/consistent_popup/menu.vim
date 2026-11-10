@@ -62,6 +62,7 @@ endclass
 
 export class Menu extends cp.ConsistentPopup
     var menuArea: MenuArea
+    var _counter: string = ''
 
     def _MenuBarPosition(): dict<any>
         var menuId = this.menuArea.Get()
@@ -81,10 +82,6 @@ export class Menu extends cp.ConsistentPopup
 
     def new(properties: dict<any>)
         this.menuArea = MenuArea.new(properties)
-        var menuId = this.menuArea.Get()
-        var opts = popup_getoptions(menuId)
-        var pos = popup_getpos(menuId)
-
         this.id = popup_create(' 0 / 0 ', { hidden: v:true })
     enddef
 
@@ -100,9 +97,15 @@ export class Menu extends cp.ConsistentPopup
         this.Show(properties)
     enddef
 
+    # Called on every refresh tick: only touch the popup when the counter
+    # text really changed, so an idle list causes no redraws.
     def Update()
         var id = this.menuArea.Get()
-        popup_settext(this.id, ' ' .. getcurpos(id)[1] .. ' / ' .. line('$', id) .. ' ')
+        var counter = ' ' .. getcurpos(id)[1] .. ' / ' .. line('$', id) .. ' '
+        if counter !=# this._counter
+            this._counter = counter
+            popup_settext(this.id, counter)
+        endif
     enddef
 
     def Show(properties: dict<any>)

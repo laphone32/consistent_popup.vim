@@ -6,6 +6,9 @@ else
     silent! prop_type_change('InputCursorStyle', {highlight: 'Directory', override: v:true})
 endif
 
+# {pos} and all slicing are in characters (Vim9 string indexing and slice()
+# treat a base character plus its composing characters as one), so multibyte
+# input such as CJK or accented letters edits correctly.
 export class DoAsInput
     var id: number
     var buffer: string
@@ -14,7 +17,7 @@ export class DoAsInput
 
     def new(properties: dict<any>)
         this.buffer = properties->get('buffer', '')
-        this.pos = len(this.buffer)
+        this.pos = strcharlen(this.buffer)
         this.onType = properties->get('onType', (key, all) => {
             })
         this.id = popup_dialog('', {
@@ -25,53 +28,64 @@ export class DoAsInput
         }->extend(properties))
     enddef
 
+    def _Before(): string
+        return this.buffer->slice(0, this.pos)
+    enddef
+
+    def _After(offset: number = 0): string
+        return this.buffer->slice(this.pos + offset)
+    enddef
+
     def _Render()
-        var display = (this.pos > 0 ? this.buffer[ : this.pos - 1] : '')
-                    .. '▏'
-                    .. this.buffer[this.pos : ]
+        var before = this._Before()
         popup_settext(this.id, [{
-            text: display,
+            text: before .. '▏' .. this._After(),
             props: [{
-                col: this.pos + 1,
+                col: len(before) + 1,
                 length: len('▏'),
                 type: 'InputCursorStyle',
             }],
         }])
     enddef
 
+    # Typed text, including multibyte characters and multi-character input
+    # (e.g. an IME commit); rejects special keys and control characters.
+    def _IsText(key: string): bool
+        if empty(key) || key[0] ==# "\x80"
+            return v:false
+        endif
+        return key !~ '[\x01-\x1f\x7f]'
+    enddef
+
     def _KeyFilter(id: number, key: string): bool
         var handled = v:true
+        var length = strcharlen(this.buffer)
 
         if key ==# "\<Left>" || key ==# "\<C-b>"
             this.pos = max([0, this.pos - 1])
         elseif key ==# "\<Right>" || key ==# "\<C-f>"
-            this.pos = min([len(this.buffer), this.pos + 1])
+            this.pos = min([length, this.pos + 1])
         elseif key ==# "\<Home>" || key ==# "\<C-a>"
             this.pos = 0
         elseif key ==# "\<End>" || key ==# "\<C-e>"
-            this.pos = len(this.buffer)
+            this.pos = length
         elseif key ==# "\<bs>" || key ==# "\<C-h>"
             if this.pos > 0
-                var before = this.pos > 1 ? this.buffer[ : this.pos - 2] : ''
-                var after = this.buffer[this.pos : ]
-                this.buffer = before .. after
+                this.buffer = this.buffer->slice(0, this.pos - 1) .. this._After()
                 this.pos -= 1
             endif
         elseif key ==# "\<Del>" || key ==# "\<C-d>"
-            if this.pos < len(this.buffer)
-                var before = this.pos > 0 ? this.buffer[ : this.pos - 1] : ''
-                var after = this.buffer[this.pos + 1 : ]
-                this.buffer = before .. after
+            if this.pos < length
+                this.buffer = this._Before() .. this._After(1)
             endif
         elseif key ==# "\<C-u>"
             this.buffer = ''
             this.pos = 0
         elseif key ==# "\<C-w>"
             if this.pos > 0
-                var before = this.buffer[ : this.pos - 1]
-                var trimmed = substitute(before, '\s*\k*$', '', '')
-                this.buffer = trimmed .. this.buffer[this.pos : ]
-                this.pos = len(trimmed)
+                var trimmed = substitute(this._Before(), '\s*\k*$', '', '')
+                this.buffer = trimmed .. this._After()
+                this.pos = strcharlen(trimmed)
             endif
         elseif key ==# "\<esc>"
             popup_hide(this.id)
@@ -80,16 +94,11 @@ export class DoAsInput
             popup_hide(this.id)
             this.onType(key, this.buffer)
             return v:true
+        elseif this._IsText(key)
+            this.buffer = this._Before() .. key .. this._After()
+            this.pos += strcharlen(key)
         else
-            var nr = char2nr(key)
-            if nr >= 32 && nr <= 126
-                var before = this.pos > 0 ? this.buffer[ : this.pos - 1] : ''
-                var after = this.buffer[this.pos : ]
-                this.buffer = before .. key .. after
-                this.pos += 1
-            else
-                handled = v:false
-            endif
+            handled = v:false
         endif
 
         if handled
@@ -102,7 +111,7 @@ export class DoAsInput
 
     def Open(properties = {})
         this.buffer = properties->get('buffer', '')
-        this.pos = len(this.buffer)
+        this.pos = strcharlen(this.buffer)
         this.onType = properties->get('onType', this.onType)
 
         popup_setoptions(this.id, properties)
@@ -111,4 +120,3 @@ export class DoAsInput
         popup_show(this.id)
     enddef
 endclass
-

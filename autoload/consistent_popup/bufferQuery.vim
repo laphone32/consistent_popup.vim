@@ -1,16 +1,18 @@
 vim9script
 
 import "./queryType.vim" as qt
+import "./util.vim" as ut
 
 export class BufferQuery extends qt.QueryType
     def _LongPathMode(line: number): dict<any>
         var data = this.lookup[line]
         var path = len(data.name) > 0 ? data.name : ' [NO NAME] '
+        var [mstart, mend] = data.match
         return ({
             text: (data.changed ? '+' : ' ') .. ' ' .. path,
-            props: [
-                { type: 'MatchStyle', location: [[line, data.match[1] + 3, line, data.match[2] + 3]] },
-            ],
+            props: mend > mstart
+                ? [{ type: 'MatchStyle', location: [[line, mstart + 3, line, mend + 3]] }]
+                : [],
         })
     enddef
 
@@ -33,7 +35,7 @@ export class BufferQuery extends qt.QueryType
     enddef
 
     def Start(query: dict<any>): bool
-        var keyword = query->get('keyword')
+        var keyword = query->get('keyword', '')
         var keep_path = query->get('keepPath', v:false)
         var active_bufnr = bufnr('%')
 
@@ -42,9 +44,9 @@ export class BufferQuery extends qt.QueryType
                 return x
             endif
             var path = len(data.name) > 0 ? data.name : ' [NO NAME] '
-            var match = len(keyword) > 0 ? path->matchstrpos(keyword) : [0, -2, -2]
-            if len(keyword) == 0 || match[1] >= 0
-                data.match = match
+            var [mstart, mend] = ut.Match(path, keyword)
+            if mstart >= 0
+                data.match = [mstart, mend]
                 data.filename = fnamemodify(path, ':t')
                 if !keep_path && data.bufnr == active_bufnr
                     this.cursorLine = len(x)
@@ -62,8 +64,8 @@ export class BufferQuery extends qt.QueryType
     def OnListKey(key: string, line: number): bool
         if line < len(this.lookup)
             if key ==# "\<cr>"
-                execute 'silent! buffer ' .. this.lookup[line]['bufnr']
-                return v:true
+                var nr = this.lookup[line]['bufnr']
+                return this.SwitchTo('buffer ' .. nr, () => bufnr('%') == nr)
             endif
         endif
         return v:true
@@ -73,8 +75,10 @@ export class BufferQuery extends qt.QueryType
         if line < len(this.lookup)
             var data = this.lookup[line]
             if !empty(data) && has_key(data, 'bufnr')
-                execute 'silent! buffer ' .. data.bufnr
-                redraw
+                var nr = data.bufnr
+                if this.SwitchTo('buffer ' .. nr, () => bufnr('%') == nr)
+                    redraw
+                endif
             endif
         endif
     enddef
